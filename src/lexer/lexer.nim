@@ -35,7 +35,7 @@ proc read_char*(l: var Lexer) =
   l.position = l.next_position
   l.next_position += 1
 
-proc peek_char*(l: var Lexer): char =
+proc next_char*(l: var Lexer): char =
   result = l.input[l.next_position]
   if l.next_position >= len(l.input):
     result = '\0'
@@ -45,13 +45,13 @@ proc next_token*(l: var Lexer): token.Token =
 
   case l.curr_char
   of '=':
-    if l.peek_char() == '=':
+    if l.next_char() == '=':
       l.read_char()
       result = token.token(token.EQ, "==")
     else:
       result = token.token(token.ASSIGN, $l.curr_char)
   of '!':
-    if l.peek_char() == '=':
+    if l.next_char() == '=':
       l.read_char()
       result = token.token(token.NEQ, "!=")
     else:

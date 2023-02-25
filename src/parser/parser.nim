@@ -102,12 +102,12 @@ proc register_prefix(p: var Parser, token_type: token.TokenType, prfn: PrefixPar
 proc register_infix(p: var Parser, token_type: token.TokenType, infn: InfixParseFn)
 proc lexer_next_token(p: var Parser)
 proc curr_precedence(p: Parser): Precedence
-proc peek_precedence(p: Parser): Precedence
+proc next_precedence(p: Parser): Precedence
 proc expect_peek(p: var Parser, token_type: token.TokenType): bool
 proc peek_error(p: var Parser, token_type: token.TokenType)
 proc no_prefix_parse_fn_error(p: var Parser, token_type: token.TokenType)
 proc curr_token_is(p: Parser, token_type: token.TokenType): bool
-proc peek_token_is(p: Parser, token_type: token.TokenType): bool
+proc next_token_is(p: Parser, token_type: token.TokenType): bool
 proc check_parser_errors(p: Parser)
 
 # procedures
@@ -309,7 +309,7 @@ proc parse_expression_statement(p: var Parser): ExpressionStatement =
   result.token = p.curr_token
   result.expression = p.parse_expression(Precedence.prLowest)
 
-  if p.peek_token_is(token.SEMICOLON):
+  if p.next_token_is(token.SEMICOLON):
     p.lexer_next_token()
 
 proc parse_expression(p: var Parser, pr: Precedence): Node =
@@ -319,11 +319,15 @@ proc parse_expression(p: var Parser, pr: Precedence): Node =
     return nil
   result = prefix_fn(p)
 
-  while not p.peek_token_is(token.SEMICOLON) and pr < p.peek_precedence():
+  # break loop on equal precedence to assure only one expression of the same type is evaluated,
+  # though still allow the expr's in the expr <op> expr pattern to represent something like expr = (expr0 <op> expr1)
+  while not p.next_token_is(token.SEMICOLON) and pr < p.next_precedence():
     let infix_fn = p.infix_parse_fns.getOrDefault(p.next_token.token_type, nil)
     if infix_fn == nil: return
     p.lexer_next_token()
-    result = infix_fn(p, result) # recursively continue evalutating infix expressions in order of precedence
+    # evaluate the next expr <op> expr pattern, and continue looping at lowest precedence 
+    # -> (((expr <op> expr) <op> expr) <op> expr) etc..
+    result = infix_fn(p, result)
 
 # jump table functions -> generic, return Node type
 proc parse_identifier(p: var Parser): Node =
@@ -372,11 +376,11 @@ proc lexer_next_token(p: var Parser) =
 proc curr_precedence(p: Parser): Precedence =
   precedences.getOrDefault(p.curr_token.token_type, Precedence.prLowest)
 
-proc peek_precedence(p: Parser): Precedence =
+proc next_precedence(p: Parser): Precedence =
   precedences.getOrDefault(p.next_token.token_type, Precedence.prLowest)
 
 proc expect_peek(p: var Parser, token_type: token.TokenType): bool =
-  if p.peek_token_is(token_type):
+  if p.next_token_is(token_type):
     p.lexer_next_token()
     result = true
   else:
@@ -392,7 +396,7 @@ proc no_prefix_parse_fn_error(p: var Parser, token_type: token.TokenType) =
 proc curr_token_is(p: Parser, token_type: token.TokenType): bool = 
   result = p.curr_token.token_type == token_type
 
-proc peek_token_is(p: Parser, token_type: token.TokenType): bool = 
+proc next_token_is(p: Parser, token_type: token.TokenType): bool = 
   result = p.next_token.token_type == token_type
 
 proc check_parser_errors(p: Parser) =
