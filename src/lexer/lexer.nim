@@ -1,4 +1,5 @@
 import std/unittest
+
 import ../token/token
 
 type

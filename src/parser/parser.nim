@@ -1,5 +1,7 @@
 import std/unittest
 import std/tables
+import std/strutils
+
 import ../util/util
 import ../token/token
 import ../lexer/lexer
@@ -27,6 +29,21 @@ type
   IdentifierExpression* = ref object of Node
     token*: token.Token
     value*: string
+
+  IntegerLiteralExpression* = ref object of Node
+    token*: token.Token
+    value*: int64
+
+  PrefixExpression* = ref object of Node
+    token*: token.Token
+    operator*: string
+    value*: Node # invariant: must be an expression
+
+  InfixExpression* = ref object of Node
+    token*: token.Token
+    operator*: string
+    left_value*: Node # invariant: must be an expression
+    right_value*: Node # invariant: must be an expression
 
   LetStatement* = ref object of Node
     token*: token.Token
@@ -59,6 +76,18 @@ type
     prefix_parse_fns*: tables.Table[token.TokenType, PrefixParseFn]
     infix_parse_fns*: tables.Table[token.TokenType, InfixParseFn]
 
+const
+  precedences = {
+    token.EQ: Precedence.prEQUALS,
+    token.NEQ: Precedence.prEQUALS,
+    token.LT: Precedence.prLTGT,
+    token.GT: Precedence.prLTGT,
+    token.PLUS: Precedence.prAddSub,
+    token.MINUS: Precedence.prAddSub,
+    token.SLASH: Precedence.prDivMul,
+    token.ASTERISK: Precedence.prDivMul 
+  }.toTable
+
 # forward declarations
 proc parse_statement(p: var Parser): Node
 proc parse_let_statement(p: var Parser): LetStatement
@@ -66,11 +95,17 @@ proc parse_return_statement(p: var Parser): ReturnStatement
 proc parse_expression_statement(p: var Parser): ExpressionStatement
 proc parse_expression(p: var Parser, pr: Precedence): Node
 proc parse_identifier(p: var Parser): Node
+proc parse_integer_literal(p: var Parser): Node
+proc parse_prefix(p: var Parser): Node
+proc parse_infix(p: var Parser, left: Node): Node
 proc register_prefix(p: var Parser, token_type: token.TokenType, prfn: PrefixParseFn)
 proc register_infix(p: var Parser, token_type: token.TokenType, infn: InfixParseFn)
 proc lexer_next_token(p: var Parser)
+proc curr_precedence(p: Parser): Precedence
+proc peek_precedence(p: Parser): Precedence
 proc expect_peek(p: var Parser, token_type: token.TokenType): bool
 proc peek_error(p: var Parser, token_type: token.TokenType)
+proc no_prefix_parse_fn_error(p: var Parser, token_type: token.TokenType)
 proc curr_token_is(p: Parser, token_type: token.TokenType): bool
 proc peek_token_is(p: Parser, token_type: token.TokenType): bool
 proc check_parser_errors(p: Parser)
@@ -93,6 +128,39 @@ method token_literal*(ie: IdentifierExpression): string =
 
 method string*(ie: IdentifierExpression): string = 
   ie.value
+
+# integer literal expression procs
+proc integer_literal_expression*(t: token.Token, v: string): IntegerLiteralExpression =
+  IntegerLiteralExpression(node_type: ntExpression, expression_name: "IntegerLiteralExpression",
+                           token: t, value: v.parseInt)
+
+method token_literal*(ie: IntegerLiteralExpression): string = 
+  ie.token.literal
+
+method string*(ie: IntegerLiteralExpression): string = 
+  $ie.value
+
+# prefix expression procs
+proc prefix_expression*(t: token.Token, o: string, v: Node): PrefixExpression =
+  PrefixExpression(node_type: ntExpression, expression_name: "PrefixExpression",
+                   token: t, operator: o, value: v)
+
+method token_literal*(pe: PrefixExpression): string = 
+  pe.token.literal
+
+method string*(pe: PrefixExpression): string =
+  "(" & pe.operator & pe.value.string() & ")"
+
+# infix expression procs
+proc infix_expression*(t: token.Token, o: string, lv, rv: Node): InfixExpression =
+  InfixExpression(node_type: ntExpression, expression_name: "InfixExpression",
+                  token: t, operator: o, left_value: lv, right_value: rv)
+
+method token_literal*(ie: InfixExpression): string = 
+  ie.token.literal
+
+method string*(ie: InfixExpression): string =
+  "(" & ie.left_value.string() & ie.operator & ie.right_value.string() & ")"
 
 # let statement procs
 proc let_statement*(t: token.Token, n: IdentifierExpression, v: Node): LetStatement =
@@ -173,6 +241,18 @@ proc parser*(l: Lexer): Parser =
   )
 
   result.register_prefix(token.IDENT, parse_identifier)
+  result.register_prefix(token.INT, parse_integer_literal)
+  result.register_prefix(token.BANG, parse_prefix)
+  result.register_prefix(token.MINUS, parse_prefix)
+
+  result.register_infix(token.PLUS, parse_infix)
+  result.register_infix(token.MINUS, parse_infix)
+  result.register_infix(token.SLASH, parse_infix)
+  result.register_infix(token.ASTERISK, parse_infix)
+  result.register_infix(token.LT, parse_infix)
+  result.register_infix(token.GT, parse_infix)
+  result.register_infix(token.EQ, parse_infix)
+  result.register_infix(token.NEQ, parse_infix)
 
   result.lexer_next_token()
   result.lexer_next_token()
@@ -235,13 +315,49 @@ proc parse_expression_statement(p: var Parser): ExpressionStatement =
 proc parse_expression(p: var Parser, pr: Precedence): Node =
   var prefix_fn = p.prefix_parse_fns.getOrDefault(p.curr_token.token_type, nil)
   if prefix_fn == nil:
+    p.no_prefix_parse_fn_error(p.curr_token.token_type)
     return nil
-
   result = prefix_fn(p)
+
+  while not p.peek_token_is(token.SEMICOLON) and pr < p.peek_precedence():
+    let infix_fn = p.infix_parse_fns.getOrDefault(p.next_token.token_type, nil)
+    if infix_fn == nil: return
+    p.lexer_next_token()
+    result = infix_fn(p, result) # recursively continue evalutating infix expressions in order of precedence
 
 # jump table functions -> generic, return Node type
 proc parse_identifier(p: var Parser): Node =
   identifier_expression(p.curr_token, p.curr_token.literal)
+
+proc parse_integer_literal(p: var Parser): Node =
+  var il = IntegerLiteralExpression()
+  il.token = p.curr_token
+  try:
+    il.value = p.curr_token.literal.parseInt
+  except: 
+    p.errors.add(error("could not parse " & p.curr_token.literal & " as integer!"))
+    return nil
+  result = il
+
+proc parse_prefix(p: var Parser): Node =
+  var pe = PrefixExpression()
+  pe.token = p.curr_token
+  pe.operator = p.curr_token.literal
+
+  p.lexer_next_token()
+  pe.value = p.parse_expression(Precedence.prPrefix)
+  result = pe
+
+proc parse_infix(p: var Parser, left: Node): Node =
+  var ie = InfixExpression()
+  ie.token = p.curr_token
+  ie.operator = p.curr_token.literal
+  ie.left_value = left
+
+  let precedence = p.curr_precedence()
+  p.lexer_next_token()
+  ie.right_value = p.parse_expression(precedence)
+  result = ie
 
 proc register_prefix(p: var Parser, token_type: token.TokenType, prfn: PrefixParseFn) =
   p.prefix_parse_fns[token_type] = prfn
@@ -253,6 +369,12 @@ proc lexer_next_token(p: var Parser) =
   p.curr_token = p.next_token
   p.next_token = p.lexer.next_token()
 
+proc curr_precedence(p: Parser): Precedence =
+  precedences.getOrDefault(p.curr_token.token_type, Precedence.prLowest)
+
+proc peek_precedence(p: Parser): Precedence =
+  precedences.getOrDefault(p.next_token.token_type, Precedence.prLowest)
+
 proc expect_peek(p: var Parser, token_type: token.TokenType): bool =
   if p.peek_token_is(token_type):
     p.lexer_next_token()
@@ -263,6 +385,9 @@ proc expect_peek(p: var Parser, token_type: token.TokenType): bool =
 
 proc peek_error(p: var Parser, token_type: token.TokenType) =
   p.errors.add(error("expected next token to be " & token_type & " - instead got " & p.next_token.token_type))
+
+proc no_prefix_parse_fn_error(p: var Parser, token_type: token.TokenType) =
+  p.errors.add(error("no prefix parse function for " & token_type & " found"))
 
 proc curr_token_is(p: Parser, token_type: token.TokenType): bool = 
   result = p.curr_token.token_type == token_type
@@ -278,13 +403,31 @@ proc check_parser_errors(p: Parser) =
 
 suite "test parser":
   setup:
-    type TestIdent = object
-      expected_identifier: string
+    type
+      TestIdent = object
+        expected_identifier: string
 
-    proc test_ident(ei: string): TestIdent = 
+      TestPrefix = object
+        input: string
+        operator: string
+        integer_value: int64
+
+      TestInfix = object
+        input: string
+        operator: string
+        left_value: int64
+        right_value: int64
+
+    proc test_ident(ei: string): TestIdent =
       TestIdent(expected_identifier: ei)
 
-    proc test_let_statement(s: Node, name: string): bool = 
+    proc test_prefix(i, o: string, iv: int64): TestPrefix =
+      TestPrefix(input: i, operator: o, integer_value: iv)
+
+    proc test_infix(i, o: string, lv, rv: int64): TestInfix =
+      TestInfix(input: i, operator: o, left_value: lv, right_value: rv)
+
+    proc test_let_statement(s: Node, name: string): bool =
       let ls = dynamic_cast[LetStatement](s)
       result = ls != nil
       result = result and ls.name.value == name
@@ -295,13 +438,44 @@ suite "test parser":
       result = rs != nil
       result = result and rs.token_literal == "return"
 
-    proc test_identifier_expression(e: Node): bool =
+    proc test_identifier_expression(e: Node, id: string): bool =
       let es = dynamic_cast[ExpressionStatement](e)
       result = es != nil
       let ie = dynamic_cast[IdentifierExpression](es.expression)
       result = result and ie != nil
-      result = result and ie.value == "foobar"
-      result = result and ie.token_literal() == "foobar"
+      result = result and ie.value == id
+      result = result and ie.token_literal() == id
+
+    proc test_integer_literal_expression(e: Node, v: int64): bool =
+      let es = dynamic_cast[ExpressionStatement](e)
+      result = es != nil
+      let ile = dynamic_cast[IntegerLiteralExpression](es.expression)
+      result = result and ile != nil
+      result = result and ile.value == v
+      result = result and ile.token_literal() == $v
+
+    proc test_integer_literal(e: Node, value: int64): bool =
+      let ile = dynamic_cast[IntegerLiteralExpression](e)
+      result = ile != nil
+      result = result and ile.value == value
+      result = result and ile.token_literal() == $value
+
+    proc test_prefix_expression(e: Node, tp: TestPrefix): bool =
+      let es = dynamic_cast[ExpressionStatement](e)
+      result = es != nil
+      let pe = dynamic_cast[PrefixExpression](es.expression)
+      result = result and pe != nil
+      result = result and pe.operator == tp.operator
+      result = result and test_integer_literal(pe.value, tp.integer_value)
+
+    proc test_infix_expression(e: Node, ti: TestInfix): bool =
+      let es = dynamic_cast[ExpressionStatement](e)
+      result = es != nil
+      let ie = dynamic_cast[InfixExpression](es.expression)
+      result = result and ie != nil
+      result = result and test_integer_literal(ie.left_value, ti.left_value)
+      result = result and ie.operator == ti.operator
+      result = result and test_integer_literal(ie.right_value, ti.right_value)
 
   test "test let statement parsing":
     let input = """
@@ -367,7 +541,7 @@ suite "test parser":
     let p = program(@[Node(s)])
     check p.string() == "let variable_a = variable_b;\n"
 
-  test "test expression statement parsing":
+  test "test return statement parsing":
     let input = """
       return 5;
       return foobar;
@@ -393,4 +567,50 @@ suite "test parser":
     parser.check_parser_errors()
     check:
       len(program.statements) == 1
-      test_identifier_expression(program.statements[0])
+      test_identifier_expression(program.statements[0], "foobar")
+
+  test "test integer literal expression parsing":
+    let input = """
+      5;
+    """
+    let lexer = lexer.lexer(input)
+    var parser = parser(lexer)
+    let program = parser.parse_program()
+    parser.check_parser_errors()
+    check:
+      len(program.statements) == 1
+      test_integer_literal_expression(program.statements[0], 5)
+
+  test "test prefix expression parsing":
+    let tests = @[
+      test_prefix("!5;", "!", 5),
+      test_prefix("-15;", "-", 15)
+    ]
+    for test in tests:
+      let lexer = lexer.lexer(test.input)
+      var parser = parser(lexer)
+      let program = parser.parse_program()
+      parser.check_parser_errors()
+      check:
+        len(program.statements) == 1
+        test_prefix_expression(program.statements[0], test)
+
+  test "test infix expression parsing":
+    let tests = @[
+      test_infix("5 + 5;",  "+",  5, 5),
+      test_infix("5 - 5;",  "-",  5, 5),
+      test_infix("5 * 5;",  "*",  5, 5),
+      test_infix("5 / 5;",  "/",  5, 5),
+      test_infix("5 < 5;",  "<",  5, 5),
+      test_infix("5 > 5;",  ">",  5, 5),
+      test_infix("5 == 5;", "==", 5, 5),
+      test_infix("5 != 5;", "!=", 5, 5)
+    ]
+    for test in tests:
+      let lexer = lexer.lexer(test.input)
+      var parser = parser(lexer)
+      let program = parser.parse_program()
+      parser.check_parser_errors()
+      check:
+        len(program.statements) == 1
+        test_infix_expression(program.statements[0], test)
