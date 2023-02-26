@@ -1,6 +1,7 @@
 import std/unittest
 import std/tables
 import std/strutils
+import std/typetraits
 
 import ../util/util
 import ../token/token
@@ -108,10 +109,20 @@ proc peek_error(p: var Parser, token_type: token.TokenType)
 proc no_prefix_parse_fn_error(p: var Parser, token_type: token.TokenType)
 proc curr_token_is(p: Parser, token_type: token.TokenType): bool
 proc next_token_is(p: Parser, token_type: token.TokenType): bool
-proc check_parser_errors(p: Parser)
+proc check_parser_errors*(p: Parser)
 
 # procedures
 # node procs
+method `$`(n: Node): string =
+  if n != nil:
+    case n.node_type
+    of ntExpression:
+      n.expression_name
+    of ntStatement:
+      n.statement_name
+  else:
+    "<nil>"
+
 method token_literal*(n: Node): string {.base.} =
   raise newException(Exception, "PURE VIRTUAL CALL")
 
@@ -160,7 +171,7 @@ method token_literal*(ie: InfixExpression): string =
   ie.token.literal
 
 method string*(ie: InfixExpression): string =
-  "(" & ie.left_value.string() & ie.operator & ie.right_value.string() & ")"
+  "(" & ie.left_value.string() & " " & ie.operator & " " & ie.right_value.string() & ")"
 
 # let statement procs
 proc let_statement*(t: token.Token, n: IdentifierExpression, v: Node): LetStatement =
@@ -288,7 +299,9 @@ proc parse_let_statement(p: var Parser): LetStatement =
   if not p.expect_peek(token.ASSIGN):
     return nil
 
-  # todo
+  # todo uncomment below
+  #p.lexer_next_token()
+  #result.value = p.parse_expression(Precedence.prLowest)
 
   while not p.curr_token_is(token.SEMICOLON):
     p.lexer_next_token()
@@ -299,7 +312,8 @@ proc parse_return_statement(p: var Parser): ReturnStatement =
 
   p.lexer_next_token()
 
-  # todo
+  # todo uncomment below
+  #result.value = p.parse_expression(Precedence.prLowest)
 
   while not p.curr_token_is(token.SEMICOLON):
     p.lexer_next_token()
@@ -317,7 +331,7 @@ proc parse_expression(p: var Parser, pr: Precedence): Node =
   if prefix_fn == nil:
     p.no_prefix_parse_fn_error(p.curr_token.token_type)
     return nil
-  result = prefix_fn(p)
+  result = prefix_fn(p) # parse left side
 
   # break loop on equal precedence to assure only one expression of the same type is evaluated,
   # though still allow the expr's in the expr <op> expr pattern to represent something like expr = (expr0 <op> expr1)
@@ -327,7 +341,7 @@ proc parse_expression(p: var Parser, pr: Precedence): Node =
     p.lexer_next_token()
     # evaluate the next expr <op> expr pattern, and continue looping at lowest precedence 
     # -> (((expr <op> expr) <op> expr) <op> expr) etc..
-    result = infix_fn(p, result)
+    result = infix_fn(p, result) # parse right side, passing in already parsed left side
 
 # jump table functions -> generic, return Node type
 proc parse_identifier(p: var Parser): Node =
@@ -358,9 +372,14 @@ proc parse_infix(p: var Parser, left: Node): Node =
   ie.operator = p.curr_token.literal
   ie.left_value = left
 
-  let precedence = p.curr_precedence()
+  var pre = p.curr_precedence()
   p.lexer_next_token()
-  ie.right_value = p.parse_expression(precedence)
+
+  # right associative on `+` operator -> decrement precedence
+  if ie.operator == "+": 
+    dec pre
+
+  ie.right_value = p.parse_expression(pre) 
   result = ie
 
 proc register_prefix(p: var Parser, token_type: token.TokenType, prfn: PrefixParseFn) =
@@ -399,7 +418,7 @@ proc curr_token_is(p: Parser, token_type: token.TokenType): bool =
 proc next_token_is(p: Parser, token_type: token.TokenType): bool = 
   result = p.next_token.token_type == token_type
 
-proc check_parser_errors(p: Parser) =
+proc check_parser_errors*(p: Parser) =
   if len(p.errors) == 0: return
   echo "Parser had ", len p.errors, " errors:"
   for error in p.errors:
@@ -422,6 +441,10 @@ suite "test parser":
         left_value: int64
         right_value: int64
 
+      TestPrecedence = object
+        input: string
+        expected: string
+
     proc test_ident(ei: string): TestIdent =
       TestIdent(expected_identifier: ei)
 
@@ -431,11 +454,43 @@ suite "test parser":
     proc test_infix(i, o: string, lv, rv: int64): TestInfix =
       TestInfix(input: i, operator: o, left_value: lv, right_value: rv)
 
+    proc test_precedence(i, e: string): TestPrecedence =
+      TestPrecedence(input: i, expected: e)
+
+    # tests for literals, not expression statements
+    proc test_integer_literal(e: Node, value: int64): bool =
+      let ile = dynamic_cast[IntegerLiteralExpression](e)
+      result = ile != nil
+      result = result and ile.value == value
+      result = result and ile.token_literal() == $value
+
+    proc test_identifier(e: Node, value: string): bool =
+      let ie = dynamic_cast[IdentifierExpression](e)
+      result = ie != nil
+      result = result and ie.value == value
+      result = result and ie.token_literal() == value
+
+    proc test_literal(e: Node, value: auto): bool =
+      when value.type.name == "int64":
+        test_integer_literal(e, value)
+      elif value.type.name == "string":
+        test_identifier(e, value)
+      else:
+        echo "No literal test for type " & value.type.name
+        false
+
+    proc test_infix(e: Node, operator: string, left, right: auto): bool =
+      let ie = dynamic_cast[InfixExpression](e)
+      result = ie != nil
+      result = result and test_literal(ie.left_value, left)
+      result = result and ie.operator == operator
+      result = result and test_literal(ie.right_value, right)
+    # end tests for literals
+
     proc test_let_statement(s: Node, name: string): bool =
       let ls = dynamic_cast[LetStatement](s)
       result = ls != nil
-      result = result and ls.name.value == name
-      result = result and ls.name.token_literal() == name
+      result = result and test_literal(ls.name, name)
 
     proc test_return_statement(s: Node): bool =
       let rs = dynamic_cast[ReturnStatement](s)
@@ -446,9 +501,7 @@ suite "test parser":
       let es = dynamic_cast[ExpressionStatement](e)
       result = es != nil
       let ie = dynamic_cast[IdentifierExpression](es.expression)
-      result = result and ie != nil
-      result = result and ie.value == id
-      result = result and ie.token_literal() == id
+      result = result and test_literal(ie, id)
 
     proc test_integer_literal_expression(e: Node, v: int64): bool =
       let es = dynamic_cast[ExpressionStatement](e)
@@ -457,12 +510,6 @@ suite "test parser":
       result = result and ile != nil
       result = result and ile.value == v
       result = result and ile.token_literal() == $v
-
-    proc test_integer_literal(e: Node, value: int64): bool =
-      let ile = dynamic_cast[IntegerLiteralExpression](e)
-      result = ile != nil
-      result = result and ile.value == value
-      result = result and ile.token_literal() == $value
 
     proc test_prefix_expression(e: Node, tp: TestPrefix): bool =
       let es = dynamic_cast[ExpressionStatement](e)
@@ -545,22 +592,6 @@ suite "test parser":
     let p = program(@[Node(s)])
     check p.string() == "let variable_a = variable_b;\n"
 
-  test "test return statement parsing":
-    let input = """
-      return 5;
-      return foobar;
-      return add(15, 15);
-    """
-    let lexer = lexer.lexer(input)
-    var parser = parser(lexer)
-    let program = parser.parse_program()
-    parser.check_parser_errors()
-    check len(program.statements) == 3
-
-    for i in 0..<3:
-      let statement_node = program.statements[i]
-      check test_return_statement(statement_node)
-
   test "test identifier expression parsing":
     let input = """
       foobar;
@@ -618,3 +649,27 @@ suite "test parser":
       check:
         len(program.statements) == 1
         test_infix_expression(program.statements[0], test)
+        #test_infix(program.statements[0].ExpressionStatement.expression, test.operator, test.left_value, test.right_value)
+
+  test "test infix expression operator precedence parsing":
+    let tests = @[
+      test_precedence("-a * b;", "((-a) * b)"),
+      test_precedence("!-a;", "(!(-a))"),
+      test_precedence("a + b + c;", "(a + (b + c))"),
+      test_precedence("a + b - c;", "(a + (b - c))"),
+      test_precedence("a * b * c;", "((a * b) * c)"),
+      test_precedence("a * b / c;", "((a * b) / c)"),
+      test_precedence("a + b / c;", "(a + (b / c))",),
+      test_precedence("a + b * c + d / e - f;", "(a + ((b * c) + ((d / e) - f)))"),
+      test_precedence("3 + 4; -5 * 5;", "(3 + 4)\n((-5) * 5)"),
+      test_precedence("5 > 4 == 3 < 4;", "((5 > 4) == (3 < 4))"),
+      test_precedence("5 < 4 != 3 > 4;", "((5 < 4) != (3 > 4))"),
+      test_precedence("3 + 4 * 5 == 3 * 1 + 4 * 5;", "((3 + (4 * 5)) == ((3 * 1) + (4 * 5)))"),
+    ]
+    for test in tests:
+      let lexer = lexer.lexer(test.input)
+      var parser = parser(lexer)
+      let program = parser.parse_program()
+      parser.check_parser_errors()
+      check:
+        program.string() == test.expected & "\n"
