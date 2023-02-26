@@ -35,6 +35,10 @@ type
     token*: token.Token
     value*: int64
 
+  BooleanExpression* = ref object of Node
+    token*: token.Token
+    value*: bool
+
   PrefixExpression* = ref object of Node
     token*: token.Token
     operator*: string
@@ -97,6 +101,7 @@ proc parse_expression_statement(p: var Parser): ExpressionStatement
 proc parse_expression(p: var Parser, pr: Precedence): Node
 proc parse_identifier(p: var Parser): Node
 proc parse_integer_literal(p: var Parser): Node
+proc parse_boolean(p: var Parser): Node
 proc parse_prefix(p: var Parser): Node
 proc parse_infix(p: var Parser, left: Node): Node
 proc register_prefix(p: var Parser, token_type: token.TokenType, prfn: PrefixParseFn)
@@ -113,7 +118,7 @@ proc check_parser_errors*(p: Parser)
 
 # procedures
 # node procs
-method `$`(n: Node): string =
+proc `$`(n: Node): string =
   if n != nil:
     case n.node_type
     of ntExpression:
@@ -150,6 +155,17 @@ method token_literal*(ie: IntegerLiteralExpression): string =
 
 method string*(ie: IntegerLiteralExpression): string = 
   $ie.value
+
+# boolean expression procs
+proc boolean_expression*(t: token.Token, v: bool): BooleanExpression =
+  BooleanExpression(node_type: ntExpression, expression_name: "BooleanExpression",
+                    token: t, value: v)
+
+method token_literal*(be: BooleanExpression): string = 
+  be.token.literal
+
+method string*(be: BooleanExpression): string = 
+  be.token.literal
 
 # prefix expression procs
 proc prefix_expression*(t: token.Token, o: string, v: Node): PrefixExpression =
@@ -253,6 +269,8 @@ proc parser*(l: Lexer): Parser =
 
   result.register_prefix(token.IDENT, parse_identifier)
   result.register_prefix(token.INT, parse_integer_literal)
+  result.register_prefix(token.TRUE, parse_boolean)
+  result.register_prefix(token.FALSE, parse_boolean)
   result.register_prefix(token.BANG, parse_prefix)
   result.register_prefix(token.MINUS, parse_prefix)
 
@@ -348,14 +366,20 @@ proc parse_identifier(p: var Parser): Node =
   identifier_expression(p.curr_token, p.curr_token.literal)
 
 proc parse_integer_literal(p: var Parser): Node =
-  var il = IntegerLiteralExpression()
-  il.token = p.curr_token
+  var ile = IntegerLiteralExpression()
+  ile.token = p.curr_token
   try:
-    il.value = p.curr_token.literal.parseInt
+    ile.value = p.curr_token.literal.parseInt
   except: 
     p.errors.add(error("could not parse " & p.curr_token.literal & " as integer!"))
     return nil
-  result = il
+  result = ile
+
+proc parse_boolean(p: var Parser): Node =
+  var be = BooleanExpression()
+  be.token = p.curr_token
+  be.value = p.curr_token_is(token.TRUE)
+  result = be
 
 proc parse_prefix(p: var Parser): Node =
   var pe = PrefixExpression()
@@ -430,16 +454,20 @@ suite "test parser":
       TestIdent = object
         expected_identifier: string
 
-      TestPrefix = object
+      TestBoolean = object
         input: string
-        operator: string
-        integer_value: int64
+        expected_state: bool
 
-      TestInfix = object
+      TestPrefix[T] = object
         input: string
         operator: string
-        left_value: int64
-        right_value: int64
+        value: T
+
+      TestInfix[T] = object
+        input: string
+        operator: string
+        left_value: T
+        right_value: T
 
       TestPrecedence = object
         input: string
@@ -448,11 +476,14 @@ suite "test parser":
     proc test_ident(ei: string): TestIdent =
       TestIdent(expected_identifier: ei)
 
-    proc test_prefix(i, o: string, iv: int64): TestPrefix =
-      TestPrefix(input: i, operator: o, integer_value: iv)
+    proc test_boolean(i: string, es: bool): TestBoolean =
+      TestBoolean(input: i, expected_state: es)
 
-    proc test_infix(i, o: string, lv, rv: int64): TestInfix =
-      TestInfix(input: i, operator: o, left_value: lv, right_value: rv)
+    proc test_prefixn[T](i, o: string, v: T): TestPrefix[T] =
+      TestPrefix[T](input: i, operator: o, value: v)
+
+    proc test_infixn[T](i, o: string, lv, rv: T): TestInfix[T] =
+      TestInfix[T](input: i, operator: o, left_value: lv, right_value: rv)
 
     proc test_precedence(i, e: string): TestPrecedence =
       TestPrecedence(input: i, expected: e)
@@ -470,14 +501,29 @@ suite "test parser":
       result = result and ie.value == value
       result = result and ie.token_literal() == value
 
+    proc test_boolean(e: Node, value: bool): bool =
+      let be = dynamic_cast[BooleanExpression](e)
+      result = be != nil
+      result = result and be.value == value
+      result = result and be.token_literal() == $value
+
     proc test_literal(e: Node, value: auto): bool =
-      when value.type.name == "int64":
+      const type_name = value.type.name
+      when type_name == "int64" or type_name == "int":
         test_integer_literal(e, value)
-      elif value.type.name == "string":
+      elif type_name == "string":
         test_identifier(e, value)
+      elif type_name == "bool":
+        test_boolean(e, value)
       else:
-        echo "No literal test for type " & value.type.name
+        echo "No literal test for type " & type_name
         false
+
+    proc test_prefix(e: Node, operator: string, left: auto): bool =
+      let pe = dynamic_cast[PrefixExpression](e)
+      result = pe != nil
+      result = result and pe.operator == operator
+      result = result and test_literal(pe.value, left)
 
     proc test_infix(e: Node, operator: string, left, right: auto): bool =
       let ie = dynamic_cast[InfixExpression](e)
@@ -496,37 +542,6 @@ suite "test parser":
       let rs = dynamic_cast[ReturnStatement](s)
       result = rs != nil
       result = result and rs.token_literal == "return"
-
-    proc test_identifier_expression(e: Node, id: string): bool =
-      let es = dynamic_cast[ExpressionStatement](e)
-      result = es != nil
-      let ie = dynamic_cast[IdentifierExpression](es.expression)
-      result = result and test_literal(ie, id)
-
-    proc test_integer_literal_expression(e: Node, v: int64): bool =
-      let es = dynamic_cast[ExpressionStatement](e)
-      result = es != nil
-      let ile = dynamic_cast[IntegerLiteralExpression](es.expression)
-      result = result and ile != nil
-      result = result and ile.value == v
-      result = result and ile.token_literal() == $v
-
-    proc test_prefix_expression(e: Node, tp: TestPrefix): bool =
-      let es = dynamic_cast[ExpressionStatement](e)
-      result = es != nil
-      let pe = dynamic_cast[PrefixExpression](es.expression)
-      result = result and pe != nil
-      result = result and pe.operator == tp.operator
-      result = result and test_integer_literal(pe.value, tp.integer_value)
-
-    proc test_infix_expression(e: Node, ti: TestInfix): bool =
-      let es = dynamic_cast[ExpressionStatement](e)
-      result = es != nil
-      let ie = dynamic_cast[InfixExpression](es.expression)
-      result = result and ie != nil
-      result = result and test_integer_literal(ie.left_value, ti.left_value)
-      result = result and ie.operator == ti.operator
-      result = result and test_integer_literal(ie.right_value, ti.right_value)
 
   test "test let statement parsing":
     let input = """
@@ -602,7 +617,7 @@ suite "test parser":
     parser.check_parser_errors()
     check:
       len(program.statements) == 1
-      test_identifier_expression(program.statements[0], "foobar")
+      test_identifier(program.statements[0].ExpressionStatement.expression, "foobar")
 
   test "test integer literal expression parsing":
     let input = """
@@ -614,42 +629,69 @@ suite "test parser":
     parser.check_parser_errors()
     check:
       len(program.statements) == 1
-      test_integer_literal_expression(program.statements[0], 5)
+      test_integer_literal(program.statements[0].ExpressionStatement.expression, 5)
 
   test "test prefix expression parsing":
-    let tests = @[
-      test_prefix("!5;", "!", 5),
-      test_prefix("-15;", "-", 15)
+    let tests_int = @[
+      test_prefixn("!5;", "!", 5),
+      test_prefixn("-15;", "-", 15)
     ]
-    for test in tests:
+    let tests_bool = @[
+      test_prefixn("!true;", "!", true),
+      test_prefixn("!false;", "!", false)
+    ]
+    for test in tests_int:
       let lexer = lexer.lexer(test.input)
       var parser = parser(lexer)
       let program = parser.parse_program()
       parser.check_parser_errors()
       check:
         len(program.statements) == 1
-        test_prefix_expression(program.statements[0], test)
+        test_prefix(program.statements[0].ExpressionStatement.expression, test.operator, test.value.int64)
+
+    for test in tests_bool:
+      let lexer = lexer.lexer(test.input)
+      var parser = parser(lexer)
+      let program = parser.parse_program()
+      parser.check_parser_errors()
+      check:
+        len(program.statements) == 1
+        test_prefix(program.statements[0].ExpressionStatement.expression, test.operator, test.value.bool)
+
 
   test "test infix expression parsing":
-    let tests = @[
-      test_infix("5 + 5;",  "+",  5, 5),
-      test_infix("5 - 5;",  "-",  5, 5),
-      test_infix("5 * 5;",  "*",  5, 5),
-      test_infix("5 / 5;",  "/",  5, 5),
-      test_infix("5 < 5;",  "<",  5, 5),
-      test_infix("5 > 5;",  ">",  5, 5),
-      test_infix("5 == 5;", "==", 5, 5),
-      test_infix("5 != 5;", "!=", 5, 5)
+    let tests_int = @[
+      test_infixn("5 + 5;",  "+",  5, 5),
+      test_infixn("5 - 5;",  "-",  5, 5),
+      test_infixn("5 * 5;",  "*",  5, 5),
+      test_infixn("5 / 5;",  "/",  5, 5),
+      test_infixn("5 < 5;",  "<",  5, 5),
+      test_infixn("5 > 5;",  ">",  5, 5),
+      test_infixn("5 == 5;", "==", 5, 5),
+      test_infixn("5 != 5;", "!=", 5, 5),
     ]
-    for test in tests:
+    let tests_bool = @[
+      test_infixn("true == true;", "==", true, true),
+      test_infixn("true != false;", "!=", true, false),
+      test_infixn("false == false;", "==", false, false),
+    ]
+    for test in tests_int:
       let lexer = lexer.lexer(test.input)
       var parser = parser(lexer)
       let program = parser.parse_program()
       parser.check_parser_errors()
       check:
         len(program.statements) == 1
-        test_infix_expression(program.statements[0], test)
-        #test_infix(program.statements[0].ExpressionStatement.expression, test.operator, test.left_value, test.right_value)
+        test_infix(program.statements[0].ExpressionStatement.expression, test.operator, test.left_value.int64, test.right_value.int64)
+
+    for test in tests_bool:
+      let lexer = lexer.lexer(test.input)
+      var parser = parser(lexer)
+      let program = parser.parse_program()
+      parser.check_parser_errors()
+      check:
+        len(program.statements) == 1
+        test_infix(program.statements[0].ExpressionStatement.expression, test.operator, test.left_value.bool, test.right_value.bool)
 
   test "test infix expression operator precedence parsing":
     let tests = @[
@@ -665,6 +707,10 @@ suite "test parser":
       test_precedence("5 > 4 == 3 < 4;", "((5 > 4) == (3 < 4))"),
       test_precedence("5 < 4 != 3 > 4;", "((5 < 4) != (3 > 4))"),
       test_precedence("3 + 4 * 5 == 3 * 1 + 4 * 5;", "((3 + (4 * 5)) == ((3 * 1) + (4 * 5)))"),
+      test_precedence("true;", "true"),
+      test_precedence("false;", "false"),
+      test_precedence("3 > 5 == false", "((3 > 5) == false)"),
+      test_precedence("3 < 5 == true", "((3 < 5) == true)")
     ]
     for test in tests:
       let lexer = lexer.lexer(test.input)
@@ -673,3 +719,16 @@ suite "test parser":
       parser.check_parser_errors()
       check:
         program.string() == test.expected & "\n"
+
+  test "test boolean expression parsing":
+    let tests = @[
+      test_boolean("true;", true),
+      test_boolean("false;", false)
+    ]
+    for test in tests:
+      let lexer = lexer.lexer(test.input)
+      var parser = parser(lexer)
+      let program = parser.parse_program()
+      parser.check_parser_errors()
+      check:
+        test_boolean(program.statements[0].ExpressionStatement.expression, test.expected_state)
