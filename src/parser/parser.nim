@@ -104,6 +104,7 @@ proc parse_integer_literal(p: var Parser): Node
 proc parse_boolean(p: var Parser): Node
 proc parse_prefix(p: var Parser): Node
 proc parse_infix(p: var Parser, left: Node): Node
+proc parse_grouped(p: var Parser): Node
 proc register_prefix(p: var Parser, token_type: token.TokenType, prfn: PrefixParseFn)
 proc register_infix(p: var Parser, token_type: token.TokenType, infn: InfixParseFn)
 proc lexer_next_token(p: var Parser)
@@ -273,6 +274,7 @@ proc parser*(l: Lexer): Parser =
   result.register_prefix(token.FALSE, parse_boolean)
   result.register_prefix(token.BANG, parse_prefix)
   result.register_prefix(token.MINUS, parse_prefix)
+  result.register_prefix(token.LPAREN, parse_grouped)
 
   result.register_infix(token.PLUS, parse_infix)
   result.register_infix(token.MINUS, parse_infix)
@@ -406,6 +408,13 @@ proc parse_infix(p: var Parser, left: Node): Node =
   ie.right_value = p.parse_expression(pre) 
   result = ie
 
+proc parse_grouped(p: var Parser): Node =
+  p.lexer_next_token()
+  result = p.parse_expression(Precedence.prLowest)
+
+  if not p.expect_peek(token.RPAREN):
+    result = nil
+
 proc register_prefix(p: var Parser, token_type: token.TokenType, prfn: PrefixParseFn) =
   p.prefix_parse_fns[token_type] = prfn
 
@@ -473,10 +482,10 @@ suite "test parser":
         input: string
         expected: string
 
-    proc test_ident(ei: string): TestIdent =
+    proc test_identn(ei: string): TestIdent =
       TestIdent(expected_identifier: ei)
 
-    proc test_boolean(i: string, es: bool): TestBoolean =
+    proc test_booleann(i: string, es: bool): TestBoolean =
       TestBoolean(input: i, expected_state: es)
 
     proc test_prefixn[T](i, o: string, v: T): TestPrefix[T] =
@@ -485,7 +494,7 @@ suite "test parser":
     proc test_infixn[T](i, o: string, lv, rv: T): TestInfix[T] =
       TestInfix[T](input: i, operator: o, left_value: lv, right_value: rv)
 
-    proc test_precedence(i, e: string): TestPrecedence =
+    proc test_precedencen(i, e: string): TestPrecedence =
       TestPrecedence(input: i, expected: e)
 
     # tests for literals, not expression statements
@@ -550,9 +559,9 @@ suite "test parser":
       let foobar = 20040605;
     """
     let tests = @[
-      test_ident("x"),
-      test_ident("y"),
-      test_ident("foobar")
+      test_identn("x"),
+      test_identn("y"),
+      test_identn("foobar")
     ]
     let lexer = lexer.lexer(input)
     var parser = parser(lexer)
@@ -658,7 +667,6 @@ suite "test parser":
         len(program.statements) == 1
         test_prefix(program.statements[0].ExpressionStatement.expression, test.operator, test.value.bool)
 
-
   test "test infix expression parsing":
     let tests_int = @[
       test_infixn("5 + 5;",  "+",  5, 5),
@@ -695,22 +703,22 @@ suite "test parser":
 
   test "test infix expression operator precedence parsing":
     let tests = @[
-      test_precedence("-a * b;", "((-a) * b)"),
-      test_precedence("!-a;", "(!(-a))"),
-      test_precedence("a + b + c;", "(a + (b + c))"),
-      test_precedence("a + b - c;", "(a + (b - c))"),
-      test_precedence("a * b * c;", "((a * b) * c)"),
-      test_precedence("a * b / c;", "((a * b) / c)"),
-      test_precedence("a + b / c;", "(a + (b / c))",),
-      test_precedence("a + b * c + d / e - f;", "(a + ((b * c) + ((d / e) - f)))"),
-      test_precedence("3 + 4; -5 * 5;", "(3 + 4)\n((-5) * 5)"),
-      test_precedence("5 > 4 == 3 < 4;", "((5 > 4) == (3 < 4))"),
-      test_precedence("5 < 4 != 3 > 4;", "((5 < 4) != (3 > 4))"),
-      test_precedence("3 + 4 * 5 == 3 * 1 + 4 * 5;", "((3 + (4 * 5)) == ((3 * 1) + (4 * 5)))"),
-      test_precedence("true;", "true"),
-      test_precedence("false;", "false"),
-      test_precedence("3 > 5 == false", "((3 > 5) == false)"),
-      test_precedence("3 < 5 == true", "((3 < 5) == true)")
+      test_precedencen("-a * b;", "((-a) * b)"),
+      test_precedencen("!-a;", "(!(-a))"),
+      test_precedencen("a + b + c;", "(a + (b + c))"),
+      test_precedencen("a + b - c;", "(a + (b - c))"),
+      test_precedencen("a * b * c;", "((a * b) * c)"),
+      test_precedencen("a * b / c;", "((a * b) / c)"),
+      test_precedencen("a + b / c;", "(a + (b / c))",),
+      test_precedencen("a + b * c + d / e - f;", "(a + ((b * c) + ((d / e) - f)))"),
+      test_precedencen("3 + 4; -5 * 5;", "(3 + 4)\n((-5) * 5)"),
+      test_precedencen("5 > 4 == 3 < 4;", "((5 > 4) == (3 < 4))"),
+      test_precedencen("5 < 4 != 3 > 4;", "((5 < 4) != (3 > 4))"),
+      test_precedencen("3 + 4 * 5 == 3 * 1 + 4 * 5;", "((3 + (4 * 5)) == ((3 * 1) + (4 * 5)))"),
+      test_precedencen("true;", "true"),
+      test_precedencen("false;", "false"),
+      test_precedencen("3 > 5 == false", "((3 > 5) == false)"),
+      test_precedencen("3 < 5 == true", "((3 < 5) == true)")
     ]
     for test in tests:
       let lexer = lexer.lexer(test.input)
@@ -722,8 +730,8 @@ suite "test parser":
 
   test "test boolean expression parsing":
     let tests = @[
-      test_boolean("true;", true),
-      test_boolean("false;", false)
+      test_booleann("true;", true),
+      test_booleann("false;", false)
     ]
     for test in tests:
       let lexer = lexer.lexer(test.input)
@@ -731,4 +739,20 @@ suite "test parser":
       let program = parser.parse_program()
       parser.check_parser_errors()
       check:
-        test_boolean(program.statements[0].ExpressionStatement.expression, test.expected_state)
+        test_literal(program.statements[0].ExpressionStatement.expression, test.expected_state)
+
+  test "test forced precedence expression parsing":
+    let tests = @[
+      test_precedencen("1 + (2 + 3) + 4", "(1 + ((2 + 3) + 4))"),
+      test_precedencen("(5 + 5) * 2", "((5 + 5) * 2)"),
+      test_precedencen("2 / (5 + 5)", "(2 / (5 + 5))"),
+      test_precedencen("-(5 + 5)", "(-(5 + 5))"),
+      test_precedencen("!(true == true)", "(!(true == true))"),
+    ]
+    for test in tests:
+      let lexer = lexer.lexer(test.input)
+      var parser = parser(lexer)
+      let program = parser.parse_program()
+      parser.check_parser_errors()
+      check:
+        program.string() == test.expected & "\n"
