@@ -376,7 +376,7 @@ proc parse_infix(p: var Parser, left: Node): Node =
   p.lexer_next_token()
 
   # right associative on `+` operator -> decrement precedence
-  if ie.operator == "+": 
+  if ie.operator == "+":
     dec pre
 
   ie.right_value = p.parse_expression(pre) 
