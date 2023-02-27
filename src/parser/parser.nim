@@ -214,9 +214,9 @@ method token_literal*(ie: IfExpression): string =
   ie.token.literal
 
 method string*(ie: IfExpression): string =
-  result = "if " & ie.condition.string() & "\n" & ie.consequence.string()
+  result = "if " & ie.condition.string() & ":\n" & ie.consequence.string()
   if ie.alternative != nil: 
-    result &= "else\n" & ie.alternative.string() 
+    result &= "else:\n" & ie.alternative.string() 
 
 # let statement procs
 proc let_statement*(t: token.Token, n: IdentifierExpression, v: Node): LetStatement =
@@ -490,8 +490,9 @@ proc parse_if(p: var Parser): Node =
     p.lexer_next_token() # skip `}`
     if not p.expect_next(token.LBRACE):
       return nil
-      
+
     ie.alternative = p.parse_block_statement() # advance up to `}`
+  result = ie
 
 proc register_prefix(p: var Parser, token_type: token.TokenType, prfn: PrefixParseFn) =
   p.prefix_parse_fns[token_type] = prfn
@@ -842,13 +843,13 @@ suite "test parser":
     let program = parser.parse_program()
     parser.check_parser_errors()
     let ie = dynamic_cast[IfExpression](program.statements[0].ExpressionStatement.expression)
-    #check:
-      #ie != nil
-      #len(program.statements) == 1
-      #test_infix(ie.condition, "<", "x", "y")
-      #len(ie.consequence.statements) == 1
-      #test_literal(ie.consequence.statements[0].ExpressionStatement.expression, "x")
-      #ie.alternative == nil
+    check:
+      ie != nil
+      len(program.statements) == 1
+      test_infix(ie.condition, "<", "x", "y")
+      len(ie.consequence.statements) == 1
+      test_literal(ie.consequence.statements[0].ExpressionStatement.expression, "x")
+      ie.alternative == nil
 
   test "test if else expression parsing":
     let test = "if (x < y) { x } else { y };"
@@ -857,10 +858,10 @@ suite "test parser":
     let program = parser.parse_program()
     parser.check_parser_errors()
     let ie = dynamic_cast[IfExpression](program.statements[0].ExpressionStatement.expression)
-    #check:
-      #ie != nil
-      #len(program.statements) == 1
-      #test_infix(ie.condition, "<", "x", "y")
-      #len(ie.consequence.statements) == 1
-      #test_literal(ie.consequence.statements[0].ExpressionStatement.expression, "x")
-      #test_literal(ie.alternative.statements[0].ExpressionStatement.expression, "y")
+    check:
+      ie != nil
+      len(program.statements) == 1
+      test_infix(ie.condition, "<", "x", "y")
+      len(ie.consequence.statements) == 1
+      test_literal(ie.consequence.statements[0].ExpressionStatement.expression, "x")
+      test_literal(ie.alternative.statements[0].ExpressionStatement.expression, "y")
