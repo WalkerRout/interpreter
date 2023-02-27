@@ -17,7 +17,7 @@ type
     prPrefix
     prCall
 
-  NodeType* = enum
+  NodeType* {.pure.} = enum
     ntStatement,
     ntExpression
   Node* = ref object of RootObj
@@ -55,6 +55,11 @@ type
     condition*: Node # invariant: must be an expression
     consequence*: BlockStatement
     alternative*: BlockStatement
+
+  FnExpression* = ref object of Node
+    token*: token.Token
+    parameters*: seq[Node] # invariant: nodes must be identifier expressions
+    body*: BlockStatement
 
   LetStatement* = ref object of Node
     token*: token.Token
@@ -117,6 +122,8 @@ proc parse_prefix(p: var Parser): Node
 proc parse_infix(p: var Parser, left: Node): Node
 proc parse_grouped(p: var Parser): Node
 proc parse_if(p: var Parser): Node
+proc parse_fn(p: var Parser): Node
+proc parse_fn_parameters(p: var Parser): seq[Node]
 proc register_prefix(p: var Parser, token_type: token.TokenType, prfn: PrefixParseFn)
 proc register_infix(p: var Parser, token_type: token.TokenType, infn: InfixParseFn)
 proc lexer_next_token(p: var Parser)
@@ -216,7 +223,25 @@ method token_literal*(ie: IfExpression): string =
 method string*(ie: IfExpression): string =
   result = "if " & ie.condition.string() & ":\n" & ie.consequence.string()
   if ie.alternative != nil: 
-    result &= "else:\n" & ie.alternative.string() 
+    result &= "else:\n" & ie.alternative.string()
+
+# fn expression procs
+proc fn_expression*(t: token.Token, p: seq[Node], b: BlockStatement): FnExpression =
+  for param in p:
+    assert param.node_type == ntExpression  
+
+  FnExpression(node_type: ntExpression, expression_name: "FnExpression",
+               token: t, parameters: p, body: b)
+
+method token_literal*(fe: FnExpression): string = 
+  fe.token.literal
+
+method string*(fe: FnExpression): string =
+  var params: string
+  for param in fe.parameters:
+    params.add(param.string())
+
+  fe.token_literal() & "(" & params.join(", ") & "):\n" & fe.body.string()
 
 # let statement procs
 proc let_statement*(t: token.Token, n: IdentifierExpression, v: Node): LetStatement =
@@ -316,6 +341,7 @@ proc parser*(l: Lexer): Parser =
   result.register_prefix(token.MINUS, parse_prefix)
   result.register_prefix(token.LPAREN, parse_grouped)
   result.register_prefix(token.IF, parse_if)
+  result.register_prefix(token.FUNCTION, parse_fn)
 
   result.register_infix(token.PLUS, parse_infix)
   result.register_infix(token.MINUS, parse_infix)
@@ -494,6 +520,41 @@ proc parse_if(p: var Parser): Node =
     ie.alternative = p.parse_block_statement() # advance up to `}`
   result = ie
 
+proc parse_fn(p: var Parser): Node =
+  var fe = FnExpression()
+  fe.token = p.curr_token
+
+  if not p.expect_next(token.LPAREN):
+    return nil
+
+  fe.parameters = p.parse_fn_parameters()
+
+  if not p.expect_next(token.LBRACE):
+    return nil
+
+  fe.body = p.parse_block_statement()
+  result = fe
+
+proc parse_fn_parameters(p: var Parser): seq[Node] =
+  result = @[]
+
+  if p.next_token_is(token.RPAREN):
+    p.lexer_next_token()
+    return
+
+  p.lexer_next_token()
+  let ident = identifier_expression(p.curr_token, p.curr_token.literal)
+  result.add(ident)
+
+  while p.next_token_is(token.COMMA):
+    p.lexer_next_token()
+    p.lexer_next_token()
+    let ident = identifier_expression(p.curr_token, p.curr_token.literal)
+    result.add(ident)
+
+  if not p.expect_next(token.RPAREN):
+    return @[]
+
 proc register_prefix(p: var Parser, token_type: token.TokenType, prfn: PrefixParseFn) =
   p.prefix_parse_fns[token_type] = prfn
 
@@ -561,6 +622,10 @@ suite "test parser":
         input: string
         expected: string
 
+      TestFn = object
+        input: string
+        expected_params: seq[string]
+
     proc test_identn(ei: string): TestIdent =
       TestIdent(expected_identifier: ei)
 
@@ -575,6 +640,9 @@ suite "test parser":
 
     proc test_precedencen(i, e: string): TestPrecedence =
       TestPrecedence(input: i, expected: e)
+
+    proc test_fnn(i: string, ep: seq[string]): TestFn =
+      TestFn(input: i, expected_params: ep)
 
     # tests for literals, not expression statements
     proc test_integer_literal(e: Node, value: int64): bool =
@@ -606,6 +674,7 @@ suite "test parser":
       else:
         echo "No literal test for type " & type_name
         false
+    # end of tests for literals
 
     proc test_prefix(e: Node, operator: string, left: auto): bool =
       let pe = dynamic_cast[PrefixExpression](e)
@@ -865,3 +934,37 @@ suite "test parser":
       len(ie.consequence.statements) == 1
       test_literal(ie.consequence.statements[0].ExpressionStatement.expression, "x")
       test_literal(ie.alternative.statements[0].ExpressionStatement.expression, "y")
+
+  test "test fn expression parsing":
+    let test = "fn (x, y) { x + y; };"
+    let lexer = lexer.lexer(test)
+    var parser = parser(lexer)
+    let program = parser.parse_program()
+    parser.check_parser_errors()
+    let fe = dynamic_cast[FnExpression](program.statements[0].ExpressionStatement.expression)
+    check:
+      fe != nil
+      len(program.statements) == 1
+      test_literal(fe.parameters[0], "x")
+      test_literal(fe.parameters[1], "y")
+      len(fe.body.statements) == 1
+      test_infix(fe.body.statements[0].ExpressionStatement.expression, "+", "x", "y")
+
+  test "test fn expression edge case parsing":
+    let tests = @[
+      test_fnn("fn () {};", @[]),
+      test_fnn("fn (x) {};", @["x"]),
+      test_fnn("fn (x, y, z) {};", @["x", "y", "z"])
+    ]
+    for test in tests:
+      let lexer = lexer.lexer(test.input)
+      var parser = parser(lexer)
+      let program = parser.parse_program()
+      parser.check_parser_errors()
+      let fe = dynamic_cast[FnExpression](program.statements[0].ExpressionStatement.expression)
+      check:
+        fe != nil
+        len(fe.parameters) == len(test.expected_params)
+
+      for i, ep in test.expected_params.pairs:
+        check test_literal(fe.parameters[i], ep)
