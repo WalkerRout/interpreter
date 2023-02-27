@@ -50,6 +50,12 @@ type
     left_value*: Node # invariant: must be an expression
     right_value*: Node # invariant: must be an expression
 
+  IfExpression* = ref object of Node
+    token*: token.Token
+    condition*: Node # invariant: must be an expression
+    consequence*: BlockStatement
+    alternative*: BlockStatement
+
   LetStatement* = ref object of Node
     token*: token.Token
     name*: IdentifierExpression
@@ -63,12 +69,16 @@ type
     token*: token.Token
     expression*: Node # invariant: must be an expression
 
+  BlockStatement* = ref object of Node
+    token*: token.Token
+    statements: seq[Node] # invariant: nodes must be statements
+
   Error* = object
     msg: string
     src: string
 
   Program* = object
-    statements*: seq[Node]
+    statements*: seq[Node] # invariant: nodes must be statements
 
   PrefixParseFn* = proc(p: var Parser): Node
   InfixParseFn*  = proc(p: var Parser, node: Node): Node
@@ -98,6 +108,7 @@ proc parse_statement(p: var Parser): Node
 proc parse_let_statement(p: var Parser): LetStatement
 proc parse_return_statement(p: var Parser): ReturnStatement
 proc parse_expression_statement(p: var Parser): ExpressionStatement
+proc parse_block_statement(p: var Parser): BlockStatement
 proc parse_expression(p: var Parser, pr: Precedence): Node
 proc parse_identifier(p: var Parser): Node
 proc parse_integer_literal(p: var Parser): Node
@@ -105,12 +116,13 @@ proc parse_boolean(p: var Parser): Node
 proc parse_prefix(p: var Parser): Node
 proc parse_infix(p: var Parser, left: Node): Node
 proc parse_grouped(p: var Parser): Node
+proc parse_if(p: var Parser): Node
 proc register_prefix(p: var Parser, token_type: token.TokenType, prfn: PrefixParseFn)
 proc register_infix(p: var Parser, token_type: token.TokenType, infn: InfixParseFn)
 proc lexer_next_token(p: var Parser)
 proc curr_precedence(p: Parser): Precedence
 proc next_precedence(p: Parser): Precedence
-proc expect_peek(p: var Parser, token_type: token.TokenType): bool
+proc expect_next(p: var Parser, token_type: token.TokenType): bool
 proc peek_error(p: var Parser, token_type: token.TokenType)
 proc no_prefix_parse_fn_error(p: var Parser, token_type: token.TokenType)
 proc curr_token_is(p: Parser, token_type: token.TokenType): bool
@@ -170,6 +182,7 @@ method string*(be: BooleanExpression): string =
 
 # prefix expression procs
 proc prefix_expression*(t: token.Token, o: string, v: Node): PrefixExpression =
+  assert v.node_type == ntExpression
   PrefixExpression(node_type: ntExpression, expression_name: "PrefixExpression",
                    token: t, operator: o, value: v)
 
@@ -181,6 +194,7 @@ method string*(pe: PrefixExpression): string =
 
 # infix expression procs
 proc infix_expression*(t: token.Token, o: string, lv, rv: Node): InfixExpression =
+  assert lv.node_type == ntExpression and rv.node_type == ntExpression
   InfixExpression(node_type: ntExpression, expression_name: "InfixExpression",
                   token: t, operator: o, left_value: lv, right_value: rv)
 
@@ -189,6 +203,20 @@ method token_literal*(ie: InfixExpression): string =
 
 method string*(ie: InfixExpression): string =
   "(" & ie.left_value.string() & " " & ie.operator & " " & ie.right_value.string() & ")"
+
+# if expression procs
+proc if_expression*(t: token.Token, c: Node, csq, alt: BlockStatement): IfExpression =
+  assert c.node_type == ntExpression
+  IfExpression(node_type: ntExpression, expression_name: "IfExpression",
+               token: t, condition: c, consequence: csq, alternative: alt)
+
+method token_literal*(ie: IfExpression): string = 
+  ie.token.literal
+
+method string*(ie: IfExpression): string =
+  result = "if " & ie.condition.string() & "\n" & ie.consequence.string()
+  if ie.alternative != nil: 
+    result &= "else\n" & ie.alternative.string() 
 
 # let statement procs
 proc let_statement*(t: token.Token, n: IdentifierExpression, v: Node): LetStatement =
@@ -220,7 +248,7 @@ method string*(rs: ReturnStatement): string =
     result &= rs.value.string()
   result &= ";"
 
-# return statement procs
+# expression statement procs
 proc expression_statement*(t: token.Token, e: Node): ExpressionStatement =
   assert e.node_type == ntExpression # invariant
   ExpressionStatement(node_type: ntStatement, statement_name: "ExpressionStatement",
@@ -230,9 +258,21 @@ method token_literal*(es: ExpressionStatement): string =
   es.token.literal
 
 method string*(es: ExpressionStatement): string =
-  result = "<empty>"
+  result = "<nil>"
   if es.expression != nil:
     result = es.expression.string()
+
+# block statement procs
+proc block_statement*(t: token.Token, s: seq[Node]): BlockStatement =
+  BlockStatement(node_type: ntStatement, statement_name: "BlockStatement",
+                 token: t, statements: s)
+
+method token_literal*(bs: BlockStatement): string =
+  bs.token.literal
+
+method string*(bs: BlockStatement): string =
+  for statement in bs.statements:
+    result &= statement.string() & "\n"
 
 # error procs
 proc error(m: string): Error = 
@@ -275,6 +315,7 @@ proc parser*(l: Lexer): Parser =
   result.register_prefix(token.BANG, parse_prefix)
   result.register_prefix(token.MINUS, parse_prefix)
   result.register_prefix(token.LPAREN, parse_grouped)
+  result.register_prefix(token.IF, parse_if)
 
   result.register_infix(token.PLUS, parse_infix)
   result.register_infix(token.MINUS, parse_infix)
@@ -311,12 +352,12 @@ proc parse_let_statement(p: var Parser): LetStatement =
   new result
   result.token = p.curr_token
 
-  if not p.expect_peek(token.IDENT):
+  if not p.expect_next(token.IDENT):
     return nil
 
   result.name = identifier_expression(p.curr_token, p.curr_token.literal)
 
-  if not p.expect_peek(token.ASSIGN):
+  if not p.expect_next(token.ASSIGN):
     return nil
 
   # todo uncomment below
@@ -345,6 +386,19 @@ proc parse_expression_statement(p: var Parser): ExpressionStatement =
 
   if p.next_token_is(token.SEMICOLON):
     p.lexer_next_token()
+
+proc parse_block_statement(p: var Parser): BlockStatement =
+  new result
+  result.token = p.curr_token
+  result.statements = @[]
+
+  p.lexer_next_token()
+
+  while not p.curr_token_is(token.RBRACE) and not p.curr_token_is(token.EOF):
+    let s = p.parse_statement()
+    if s != nil:
+      result.statements.add(s)
+    p.lexer_next_token() # advance up to rbrace
 
 proc parse_expression(p: var Parser, pr: Precedence): Node =
   var prefix_fn = p.prefix_parse_fns.getOrDefault(p.curr_token.token_type, nil)
@@ -412,8 +466,32 @@ proc parse_grouped(p: var Parser): Node =
   p.lexer_next_token()
   result = p.parse_expression(Precedence.prLowest)
 
-  if not p.expect_peek(token.RPAREN):
+  if not p.expect_next(token.RPAREN):
     result = nil
+
+proc parse_if(p: var Parser): Node =
+  var ie = IfExpression()
+  ie.token = p.curr_token
+
+  if not p.expect_next(token.LPAREN):
+    return nil
+
+  p.lexer_next_token()
+  ie.condition = p.parse_expression(Precedence.prLowest)
+
+  if not p.expect_next(token.RPAREN):
+    return nil
+  if not p.expect_next(token.LBRACE):
+    return nil
+
+  ie.consequence = p.parse_block_statement() # advance up to `}`
+
+  if p.next_token_is(token.ELSE):
+    p.lexer_next_token() # skip `}`
+    if not p.expect_next(token.LBRACE):
+      return nil
+      
+    ie.alternative = p.parse_block_statement() # advance up to `}`
 
 proc register_prefix(p: var Parser, token_type: token.TokenType, prfn: PrefixParseFn) =
   p.prefix_parse_fns[token_type] = prfn
@@ -431,7 +509,7 @@ proc curr_precedence(p: Parser): Precedence =
 proc next_precedence(p: Parser): Precedence =
   precedences.getOrDefault(p.next_token.token_type, Precedence.prLowest)
 
-proc expect_peek(p: var Parser, token_type: token.TokenType): bool =
+proc expect_next(p: var Parser, token_type: token.TokenType): bool =
   if p.next_token_is(token_type):
     p.lexer_next_token()
     result = true
@@ -756,3 +834,33 @@ suite "test parser":
       parser.check_parser_errors()
       check:
         program.string() == test.expected & "\n"
+
+  test "test if expression parsing":
+    let test = "if (x < y) { x };"
+    let lexer = lexer.lexer(test)
+    var parser = parser(lexer)
+    let program = parser.parse_program()
+    parser.check_parser_errors()
+    let ie = dynamic_cast[IfExpression](program.statements[0].ExpressionStatement.expression)
+    #check:
+      #ie != nil
+      #len(program.statements) == 1
+      #test_infix(ie.condition, "<", "x", "y")
+      #len(ie.consequence.statements) == 1
+      #test_literal(ie.consequence.statements[0].ExpressionStatement.expression, "x")
+      #ie.alternative == nil
+
+  test "test if else expression parsing":
+    let test = "if (x < y) { x } else { y };"
+    let lexer = lexer.lexer(test)
+    var parser = parser(lexer)
+    let program = parser.parse_program()
+    parser.check_parser_errors()
+    let ie = dynamic_cast[IfExpression](program.statements[0].ExpressionStatement.expression)
+    #check:
+      #ie != nil
+      #len(program.statements) == 1
+      #test_infix(ie.condition, "<", "x", "y")
+      #len(ie.consequence.statements) == 1
+      #test_literal(ie.consequence.statements[0].ExpressionStatement.expression, "x")
+      #test_literal(ie.alternative.statements[0].ExpressionStatement.expression, "y")
