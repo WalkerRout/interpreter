@@ -87,7 +87,7 @@ type
     msg: string
     src: string
 
-  Program* = object
+  Program* = ref object of Node
     statements*: seq[Node] # invariant: nodes must be statements
 
   PrefixParseFn* = proc(p: var Parser): Node
@@ -343,11 +343,11 @@ proc log_msg(e: Error) =
 proc program*(s: seq[Node]): Program = 
   Program(statements: s)
 
-proc token_literal*(p: Program): string =
+method token_literal*(p: Program): string =
   if len(p.statements) > 0:
     result = p.statements[0].token_literal()
 
-proc string*(p: Program): string =
+method string*(p: Program): string =
   for statement in p.statements:
     result &= statement.string() & "\n"
 

@@ -1,6 +1,12 @@
 import std/unittest
 import std/tables
 
+type
+  TokenType* = string
+  Token* = object
+    token_type*: TokenType
+    literal*: string
+
 const
   ILLEGAL* = "ILLEGAL"
   EOF* = "EOF"
@@ -44,13 +50,7 @@ const
     "return": RETURN
   }.toTable
 
-type
-  TokenType* = string
-  Token* = object
-    token_type*: TokenType
-    literal*: string
-
-const DEFAULT_TOKEN* = Token(token_type: ILLEGAL, literal: "DEFAULT_TOKEN")
+  DEFAULT_TOKEN* = Token(token_type: ILLEGAL, literal: "DEFAULT_TOKEN")
 
 proc token*(tt, l: string): Token =
   Token(token_type: tt, literal: l)
