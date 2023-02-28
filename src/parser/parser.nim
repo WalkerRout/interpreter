@@ -61,6 +61,11 @@ type
     parameters*: seq[Node] # invariant: nodes must be identifier expressions
     body*: BlockStatement
 
+  FnCallExpression* = ref object of Node
+    token*: token.Token
+    function*: Node # invariant: must be an identifier expression
+    arguments*: seq[Node] # invariant: nodes must be expressions
+
   LetStatement* = ref object of Node
     token*: token.Token
     name*: IdentifierExpression
@@ -105,7 +110,8 @@ const
     token.PLUS: Precedence.prAddSub,
     token.MINUS: Precedence.prAddSub,
     token.SLASH: Precedence.prDivMul,
-    token.ASTERISK: Precedence.prDivMul 
+    token.ASTERISK: Precedence.prDivMul,
+    token.LPAREN: Precedence.prCall
   }.toTable
 
 # forward declarations
@@ -124,6 +130,8 @@ proc parse_grouped(p: var Parser): Node
 proc parse_if(p: var Parser): Node
 proc parse_fn(p: var Parser): Node
 proc parse_fn_parameters(p: var Parser): seq[Node]
+proc parse_fn_call(p: var Parser, fn: Node): Node
+proc parse_fn_call_arguments(p: var Parser): seq[Node]
 proc register_prefix(p: var Parser, token_type: token.TokenType, prfn: PrefixParseFn)
 proc register_infix(p: var Parser, token_type: token.TokenType, infn: InfixParseFn)
 proc lexer_next_token(p: var Parser)
@@ -243,6 +251,27 @@ method string*(fe: FnExpression): string =
 
   fe.token_literal() & "(" & params.join(", ") & "):\n" & fe.body.string()
 
+# fn call expression procs
+proc fn_call_expression*(t: token.Token, fn: Node, a: seq[Node]): FnCallExpression =
+  assert fn.node_type == ntExpression #and fn.expression_name == "IdentifierExpression"
+  for arg in a:
+    assert arg.node_type == ntExpression  
+
+  FnCallExpression(node_type: ntExpression, expression_name: "FnCallExpression",
+                   token: t, function: fn, arguments: a)
+
+method token_literal*(fce: FnCallExpression): string = 
+  fce.token.literal
+
+method string*(fce: FnCallExpression): string =
+  var args: string
+  for arg in fce.arguments:
+    args.add(arg.string())
+    args.add(", ")
+  args.delete(len(args)-2, len(args))
+
+  fce.function.string() & "(" & $args & ")"
+
 # let statement procs
 proc let_statement*(t: token.Token, n: IdentifierExpression, v: Node): LetStatement =
   assert v.node_type == ntExpression # invariant
@@ -351,6 +380,7 @@ proc parser*(l: Lexer): Parser =
   result.register_infix(token.GT, parse_infix)
   result.register_infix(token.EQ, parse_infix)
   result.register_infix(token.NEQ, parse_infix)
+  result.register_infix(token.LPAREN, parse_fn_call)
 
   result.lexer_next_token()
   result.lexer_next_token()
@@ -386,9 +416,8 @@ proc parse_let_statement(p: var Parser): LetStatement =
   if not p.expect_next(token.ASSIGN):
     return nil
 
-  # todo uncomment below
-  #p.lexer_next_token()
-  #result.value = p.parse_expression(Precedence.prLowest)
+  p.lexer_next_token()
+  result.value = p.parse_expression(Precedence.prLowest)
 
   while not p.curr_token_is(token.SEMICOLON):
     p.lexer_next_token()
@@ -399,8 +428,7 @@ proc parse_return_statement(p: var Parser): ReturnStatement =
 
   p.lexer_next_token()
 
-  # todo uncomment below
-  #result.value = p.parse_expression(Precedence.prLowest)
+  result.value = p.parse_expression(Precedence.prLowest)
 
   while not p.curr_token_is(token.SEMICOLON):
     p.lexer_next_token()
@@ -555,6 +583,31 @@ proc parse_fn_parameters(p: var Parser): seq[Node] =
   if not p.expect_next(token.RPAREN):
     return @[]
 
+proc parse_fn_call(p: var Parser, fn: Node): Node =
+  var fce = FnCallExpression()
+  fce.token = p.curr_token
+  fce.function = fn
+  fce.arguments = p.parse_fn_call_arguments()
+  result = fce
+
+proc parse_fn_call_arguments(p: var Parser): seq[Node] =
+  result = @[]
+
+  if p.next_token_is(token.RPAREN):
+    p.lexer_next_token()
+    return
+
+  p.lexer_next_token()
+  result.add(p.parse_expression(Precedence.prLowest))
+
+  while p.next_token_is(token.COMMA):
+    p.lexer_next_token()
+    p.lexer_next_token()
+    result.add(p.parse_expression(Precedence.prLowest))
+
+  if not p.expect_next(token.RPAREN):
+    return @[]
+
 proc register_prefix(p: var Parser, token_type: token.TokenType, prfn: PrefixParseFn) =
   p.prefix_parse_fns[token_type] = prfn
 
@@ -603,6 +656,15 @@ suite "test parser":
       TestIdent = object
         expected_identifier: string
 
+      TestLet[T] = object
+        input: string
+        expected_identifier: string
+        expected_value: T
+
+      TestReturn[T] = object
+        input: string
+        expected_value: T
+
       TestBoolean = object
         input: string
         expected_state: bool
@@ -628,6 +690,12 @@ suite "test parser":
 
     proc test_identn(ei: string): TestIdent =
       TestIdent(expected_identifier: ei)
+
+    proc test_letn[T](i: string, ei: string, ev: T): TestLet[T] =
+      TestLet[T](input: i, expected_identifier: ei, expected_value: ev)
+
+    proc test_returnn[T](i: string, ev: T): TestReturn[T] =
+      TestReturn[T](input: i, expected_value: ev)
 
     proc test_booleann(i: string, es: bool): TestBoolean =
       TestBoolean(input: i, expected_state: es)
@@ -690,36 +758,45 @@ suite "test parser":
       result = result and test_literal(ie.right_value, right)
     # end tests for literals
 
-    proc test_let_statement(s: Node, name: string): bool =
+    proc test_let_statement(s: Node, test: TestLet): bool =
       let ls = dynamic_cast[LetStatement](s)
       result = ls != nil
-      result = result and test_literal(ls.name, name)
+      result = result and test_literal(ls.name, test.expected_identifier)
+      result = result and test_literal(ls.value, test.expected_value)
 
-    proc test_return_statement(s: Node): bool =
+    proc test_return_statement(s: Node, test: TestReturn): bool =
       let rs = dynamic_cast[ReturnStatement](s)
       result = rs != nil
       result = result and rs.token_literal == "return"
+      #result = result and test_literal(rs.value, test.expected_value)
 
   test "test let statement parsing":
-    let input = """
-      let x = 5;
-      let y = 10;
-      let foobar = 20040605;
-    """
-    let tests = @[
-      test_identn("x"),
-      test_identn("y"),
-      test_identn("foobar")
+    let tests_int = @[
+      test_letn("let x = 5;", "x", 5),
+      test_letn("let y = 10;", "y", 10),
+      test_letn("let foobar = 20040605;", "foobar", 20040605),
     ]
-    let lexer = lexer.lexer(input)
-    var parser = parser(lexer)
-    let program = parser.parse_program()
-    parser.check_parser_errors()
-    check len(program.statements) == 3
+    let tests_string = @[
+      test_letn("let barfoo = x;", "barfoo", "x")
+    ]
+    for i, test in tests_int.pairs:
+      let lexer = lexer.lexer(test.input)
+      var parser = parser(lexer)
+      let program = parser.parse_program()
+      parser.check_parser_errors()
+      check:
+        len(program.statements) == 1
+        test_let_statement(program.statements[0], test)
 
-    for i, test in tests.pairs:
-      let statement_node = program.statements[i]
-      check test_let_statement(statement_node, test.expected_identifier)
+    for i, test in tests_string.pairs:
+      let lexer = lexer.lexer(test.input)
+      var parser = parser(lexer)
+      let program = parser.parse_program()
+      parser.check_parser_errors()
+      check:
+        len(program.statements) == 1
+        test_let_statement(program.statements[0], test)
+
 
   test "test error logging":
     let input = """
@@ -734,20 +811,30 @@ suite "test parser":
     check len(program.statements) == 4 # there are 4 expression statements (-> x, 5, 10, 20040605)
 
   test "test return statement parsing":
-    let input = """
-      return 5;
-      return foobar;
-      return add(15, 15);
-    """
-    let lexer = lexer.lexer(input)
-    var parser = parser(lexer)
-    let program = parser.parse_program()
-    parser.check_parser_errors()
-    check len(program.statements) == 3
+    let tests_int = @[
+      test_returnn("return 5;", 5),
+      test_returnn("return 10;", 10)
+    ]
+    let tests_string = @[
+      test_returnn("return x;", "x")
+    ]
+    for i, test in tests_int.pairs:
+      let lexer = lexer.lexer(test.input)
+      var parser = parser(lexer)
+      let program = parser.parse_program()
+      parser.check_parser_errors()
+      check:
+        len(program.statements) == 1
+        test_return_statement(program.statements[0], test)
 
-    for i in 0..<3:
-      let statement_node = program.statements[i]
-      check test_return_statement(statement_node)
+    for i, test in tests_string.pairs:
+      let lexer = lexer.lexer(test.input)
+      var parser = parser(lexer)
+      let program = parser.parse_program()
+      parser.check_parser_errors()
+      check:
+        len(program.statements) == 1
+        test_return_statement(program.statements[0], test)
 
   test "test string parsing":
     let s = let_statement(
@@ -964,7 +1051,39 @@ suite "test parser":
       let fe = dynamic_cast[FnExpression](program.statements[0].ExpressionStatement.expression)
       check:
         fe != nil
+        len(program.statements) == 1
         len(fe.parameters) == len(test.expected_params)
 
       for i, ep in test.expected_params.pairs:
         check test_literal(fe.parameters[i], ep)
+
+  test "test fn call expression parsing":
+    let test = "add(1, 2 * 3, 4 + 5);"
+    let lexer = lexer.lexer(test)
+    var parser = parser(lexer)
+    let program = parser.parse_program()
+    parser.check_parser_errors()
+    let fce = dynamic_cast[FnCallExpression](program.statements[0].ExpressionStatement.expression)
+    check:
+      fce != nil
+      len(program.statements) == 1
+      test_literal(fce.function, "add")
+      len(fce.arguments) == 3
+      test_literal(fce.arguments[0], 1)
+      test_infix(fce.arguments[1], "*", 2, 3)
+      test_infix(fce.arguments[2], "+", 4, 5)
+
+
+  test "test fn call expression precedence parsing":
+    let tests = @[
+      test_precedencen("a + add(b * c) + d;", "(a + (add((b * c)) + d))"),
+      test_precedencen("add(a, b + c, 1 * (2 + 3) / 5, add(5, 1 + 2));", "add(a, (b + c), ((1 * (2 + 3)) / 5), add(5, (1 + 2)))"),
+      test_precedencen("add(a + b + c * d / f + g);", "add((a + (b + (((c * d) / f) + g))))")
+    ]
+    for test in tests:
+      let lexer = lexer.lexer(test.input)
+      var parser = parser(lexer)
+      let program = parser.parse_program()
+      parser.check_parser_errors()
+      check:
+        program.string() == test.expected & "\n"

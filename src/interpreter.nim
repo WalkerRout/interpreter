@@ -5,7 +5,7 @@ import parser/parser
 
 proc main() =
   echo "Interpreter running...\n"
-  #repl.repl()
+  repl.repl()
 
 when isMainModule:
   main()
