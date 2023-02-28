@@ -3,12 +3,28 @@ import ../parser/parser
 import ../eval/eval
 import ../obj/obj
 
+type Status {.pure.} = enum
+  stBreak
+  stContinue
+  stIgnore
+
+proc check_command(input: string): Status
+proc clear_terminal()
+
 proc repl*() =
   echo "\t- Interpreter v0.1 -"
   while true:
     stdout.write "-> "
+
     let input = stdin.readLine()
-    if input == ".exit": break
+    let status = check_command(input)
+    case status
+    of stBreak:
+      break
+    of stContinue:
+      continue
+    of stIgnore:
+      discard
 
     let lexer = lexer.lexer(input)
     var parser = parser.parser(lexer)
@@ -20,3 +36,22 @@ proc repl*() =
       echo obj.inspect() & "\n"
     else:
       echo program.string()
+
+proc check_command(input: string): Status =
+  case input
+  of ".exit":
+    echo "Interpreter shutting down..."
+    stBreak
+  of ".clear":
+    clear_terminal()
+    stContinue
+  else:
+    stIgnore
+
+proc clear_terminal() =
+  stdout.write "\x1B[2J\x1B[1;1H"
+
+proc ctrlc*() {.noconv.} =
+  stdout.write "Interpreter shutting down..."
+  quit(0)
+setControlCHook(ctrlc)

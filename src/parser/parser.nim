@@ -81,7 +81,7 @@ type
 
   BlockStatement* = ref object of Node
     token*: token.Token
-    statements: seq[Node] # invariant: nodes must be statements
+    statements*: seq[Node] # invariant: nodes must be statements
 
   Error* = object
     msg: string
@@ -154,7 +154,7 @@ proc `$`(n: Node): string =
     of ntStatement:
       n.statement_name
   else:
-    "<nil>"
+    "nil"
 
 method token_literal*(n: Node): string {.base.} =
   raise newException(Exception, "PURE VIRTUAL CALL")
