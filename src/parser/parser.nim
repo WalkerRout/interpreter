@@ -268,9 +268,9 @@ method string*(fce: FnCallExpression): string =
   for arg in fce.arguments:
     args.add(arg.string())
     args.add(", ")
-  args.delete(len(args)-2, len(args))
+  args.delete(len(args)-2..<len(args))
 
-  fce.function.string() & "(" & $args & ")"
+  fce.function.string() & "(" & args & ")"
 
 # let statement procs
 proc let_statement*(t: token.Token, n: IdentifierExpression, v: Node): LetStatement =
@@ -715,20 +715,20 @@ suite "test parser":
     # tests for literals, not expression statements
     proc test_integer_literal(e: Node, value: int64): bool =
       let ile = dynamic_cast[IntegerLiteralExpression](e)
-      result = ile != nil
-      result = result and ile.value == value
+      if ile == nil: return false
+      result = ile.value == value
       result = result and ile.token_literal() == $value
 
     proc test_identifier(e: Node, value: string): bool =
       let ie = dynamic_cast[IdentifierExpression](e)
-      result = ie != nil
-      result = result and ie.value == value
+      if ie == nil: return false
+      result = ie.value == value
       result = result and ie.token_literal() == value
 
     proc test_boolean(e: Node, value: bool): bool =
       let be = dynamic_cast[BooleanExpression](e)
-      result = be != nil
-      result = result and be.value == value
+      if be == nil: return false
+      result = be.value == value
       result = result and be.token_literal() == $value
 
     proc test_literal(e: Node, value: auto): bool =
@@ -746,29 +746,28 @@ suite "test parser":
 
     proc test_prefix(e: Node, operator: string, left: auto): bool =
       let pe = dynamic_cast[PrefixExpression](e)
-      result = pe != nil
-      result = result and pe.operator == operator
+      if pe == nil: return false
+      result = pe.operator == operator
       result = result and test_literal(pe.value, left)
 
     proc test_infix(e: Node, operator: string, left, right: auto): bool =
       let ie = dynamic_cast[InfixExpression](e)
-      result = ie != nil
-      result = result and test_literal(ie.left_value, left)
+      if ie == nil: return false
+      result = test_literal(ie.left_value, left)
       result = result and ie.operator == operator
       result = result and test_literal(ie.right_value, right)
     # end tests for literals
 
     proc test_let_statement(s: Node, test: TestLet): bool =
       let ls = dynamic_cast[LetStatement](s)
-      result = ls != nil
-      result = result and test_literal(ls.name, test.expected_identifier)
+      if ls == nil: return false
+      result = test_literal(ls.name, test.expected_identifier)
       result = result and test_literal(ls.value, test.expected_value)
 
     proc test_return_statement(s: Node, test: TestReturn): bool =
       let rs = dynamic_cast[ReturnStatement](s)
-      result = rs != nil
-      result = result and rs.token_literal == "return"
-      #result = result and test_literal(rs.value, test.expected_value)
+      if rs == nil: return false
+      result = rs.token_literal == "return"
 
   test "test let statement parsing":
     let tests_int = @[

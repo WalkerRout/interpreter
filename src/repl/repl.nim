@@ -13,6 +13,8 @@ proc clear_terminal()
 
 proc repl*() =
   echo "\t- Interpreter v0.1 -"
+  var env = obj.environment()
+
   while true:
     stdout.write "-> "
 
@@ -31,11 +33,9 @@ proc repl*() =
     let program = parser.parse_program()
     parser.check_parser_errors()
 
-    let obj = eval.eval(program)
+    let obj = eval.eval(program, env)
     if obj != nil:
-      echo obj.inspect() & "\n"
-    else:
-      echo program.string()
+      echo obj.inspect()
 
 proc check_command(input: string): Status =
   case input
