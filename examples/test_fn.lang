@@ -1,0 +1,14 @@
+let add = fn(x, y) {
+	x + y
+};
+
+let t = true;
+let f = false;
+
+let res = if(add(1, 2) == 3) {
+	!f
+} else {
+	!t
+};
+
+res

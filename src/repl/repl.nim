@@ -45,6 +45,26 @@ proc check_command(input: string): Status =
   of ".clear":
     clear_terminal()
     stContinue
+  of ".evaluate":
+    let file_name = stdin.readLine()
+    var file: string
+    try:
+      file = readFile(file_name)
+    except: 
+      echo "File does not exist! Please try again"
+      return stContinue
+
+    let lexer = lexer.lexer(file)
+    var parser = parser.parser(lexer)
+    let program = parser.parse_program()
+    parser.check_parser_errors()
+    
+    var env = obj.environment()
+    let obj = eval.eval(program, env)
+    if obj != nil:
+      echo obj.inspect()
+
+    stContinue
   else:
     stIgnore
 
