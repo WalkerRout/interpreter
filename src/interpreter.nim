@@ -6,6 +6,7 @@ import lexer
 import parser
 import obj
 import eval
+import util
 
 proc evaluate(path: string): string =
   result = "Unable to evaluate program!"
@@ -21,7 +22,8 @@ proc evaluate(path: string): string =
   parser.check_parser_errors()
   
   var env = obj.environment()
-  let obj = eval.eval(program, env)
+  let obj = util.benchmark "program evaluation":
+    eval.eval(program, env)
   if obj != nil:
     result = obj.inspect()
 

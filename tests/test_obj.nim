@@ -1,6 +1,6 @@
 import std/unittest
-import std/tables
-import std/strutils
+#import std/tables
+#import std/strutils
 
 import ../src/obj
 

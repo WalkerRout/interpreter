@@ -1,6 +1,6 @@
 import std/unittest
 import std/tables
-import std/strutils
+#import std/strutils
 import std/typetraits
 
 import ../src/parser

@@ -2,6 +2,7 @@ import lexer
 import parser
 import eval
 import obj
+import util
 
 type Status {.pure.} = enum
   stBreak
@@ -33,7 +34,8 @@ proc repl*() =
     let program = parser.parse_program()
     parser.check_parser_errors()
 
-    let obj = eval.eval(program, env)
+    let obj = util.benchmark "eval repl program":
+      eval.eval(program, env)
     if obj != nil:
       echo obj.inspect()
 
