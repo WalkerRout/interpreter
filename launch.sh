@@ -1,5 +1,7 @@
 #!/bin/bash
 
+
+#nimble build -d:release --opt:size --overflowChecks:off --stackTrace:off
 MODE="${1:-debug}"
 
 echo "Running in $MODE mode..."
