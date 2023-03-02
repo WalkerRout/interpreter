@@ -31,11 +31,12 @@ proc repl*() =
 
     let lexer = lexer.lexer(input)
     var parser = parser.parser(lexer)
-    let program = parser.parse_program()
-    parser.check_parser_errors()
 
-    let obj = util.benchmark "eval repl program":
+    let obj = util.benchmark "program evaluation":
+      let program = parser.parse_program()
+      parser.check_parser_errors()
       eval.eval(program, env)
+
     if obj != nil:
       echo obj.inspect()
 

@@ -14,6 +14,10 @@ let div = fn(x, y) {
   x / y
 };
 
+let binop = fn(x, op, y) {
+  op(x, y)
+};
+
 let t = true;
 let f = false;
 

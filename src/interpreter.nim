@@ -18,12 +18,13 @@ proc evaluate(path: string): string =
 
   let lexer = lexer.lexer(file)
   var parser = parser.parser(lexer)
-  let program = parser.parse_program()
-  parser.check_parser_errors()
-  
   var env = obj.environment()
+
   let obj = util.benchmark "program evaluation":
+    let program = parser.parse_program()
+    parser.check_parser_errors()
     eval.eval(program, env)
+
   if obj != nil:
     result = obj.inspect()
 
