@@ -1,13 +1,40 @@
-import repl/repl
-import token/token
-import lexer/lexer
-import parser/parser
-import obj/obj
-import eval/eval
+import std/os
+
+import repl
+import token
+import lexer
+import parser
+import obj
+import eval
+
+proc evaluate(path: string): string =
+  result = "Unable to evaluate program!"
+  var file: string
+  try:
+    file = readFile(path)
+  except: 
+    return "File does not exist! Please try again"
+
+  let lexer = lexer.lexer(file)
+  var parser = parser.parser(lexer)
+  let program = parser.parse_program()
+  parser.check_parser_errors()
+  
+  var env = obj.environment()
+  let obj = eval.eval(program, env)
+  if obj != nil:
+    result = obj.inspect()
 
 proc main() =
-  echo "Interpreter running...\n"
-  repl.repl()
+  if paramCount() >= 1:
+    let arg = paramStr(1)
+    if arg == "test":
+      echo "Testing Interpreter!"
+    else:
+      echo evaluate(arg)
+  else:
+    echo "Interpreter v0.1 REPL running...\n"
+    repl.repl()
 
 when isMainModule:
   main()

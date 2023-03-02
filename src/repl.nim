@@ -1,7 +1,7 @@
-import ../lexer/lexer
-import ../parser/parser
-import ../eval/eval
-import ../obj/obj
+import lexer
+import parser
+import eval
+import obj
 
 type Status {.pure.} = enum
   stBreak
